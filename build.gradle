@@ -1,0 +1,175 @@
+buildscript {
+    repositories {
+        mavenLocal()
+        mavenCentral()
+        jcenter()
+    }
+    dependencies {
+        classpath group: 'org.hsqldb', name: 'hsqldb', version: gradle.hsqldbVersion
+    }
+}
+
+plugins {
+    id "org.akhikhl.gretty" version "1.2.4"
+    id 'org.liquibase.gradle' version '1.1.1'
+    id "com.eriwen.gradle.js" version "1.12.1"
+    id "com.eriwen.gradle.css" version "1.11.1"
+}
+
+group 'com.intetm'
+version '0.1'
+
+apply plugin: 'java'
+apply plugin: 'war'
+apply from: 'database.gradle'
+
+//noinspection GroovyUnusedAssignment
+sourceCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compile group: 'javax', name: 'javaee-api', version: gradle.javaxVersion
+
+    runtime group: 'org.springframework', name: 'spring-jdbc', version: gradle.springVersion
+    compile group: 'org.springframework', name: 'spring-webmvc', version: gradle.springVersion
+    compile group: 'org.springframework', name: 'spring-orm', version: gradle.springVersion
+    compile group: 'org.springframework', name: 'spring-tx', version: gradle.springVersion
+
+    compile group: 'org.springframework.security', name: 'spring-security-web', version: gradle.springSecurityVersion
+    runtime group: 'org.springframework.security', name: 'spring-security-config', version: gradle.springSecurityVersion
+
+    runtime group: 'org.hibernate.javax.persistence', name: 'hibernate-jpa-2.1-api', version: gradle.hibernateJpaVersion
+    runtime group: 'org.hibernate', name: 'hibernate-core', version: gradle.hibernateVersion
+    runtime group: 'org.hibernate', name: 'hibernate-entitymanager', version: gradle.hibernateVersion
+
+    compile group: 'com.fasterxml.jackson.core', name: 'jackson-core', version: "2.3.0"
+    compile group: 'com.fasterxml.jackson.core', name: 'jackson-databind', version: "2.3.0"
+
+
+    compile group: 'org.slf4j', name: 'slf4j-api', version: gradle.slf4jVersion
+    runtime group: 'ch.qos.logback', name: 'logback-classic', version: gradle.logbackVersion
+
+    runtime group: 'org.apache.taglibs', name: 'taglibs-standard-impl', version: gradle.jstlVersion
+
+    gretty group: 'org.hsqldb', name: 'hsqldb', version: gradle.hsqldbVersion
+}
+
+def serverHttpPort = project.properties['serverHttpPort'] ?: gradle.serverHttpPort
+def serverResourcesPath = project.properties['serverResourcesPath'] ?: gradle.serverResourcesPath
+def serverContextFile = project.properties['serverContextFile'] ?: gradle.serverContextFile
+def serverClassPath = [project.properties['serverClassPath'] ?: gradle.serverClassPath] as Set
+def dbUser = project.properties['dbUser'] ?: gradle.dbUser
+def dbPassword = project.properties['dbPassword'] ?: gradle.dbPassword
+def dbUrl = project.properties['dbUrl'] ?: gradle.dbUrl
+
+gretty {
+    httpPort = serverHttpPort
+    serverConfigFile = serverContextFile
+    classPath = serverClassPath
+    inplaceMode = "hard"
+}
+
+task copyEnvironment(type: Copy) {
+    group = 'develop'
+    from 'src/test/resources/environment'
+    into serverResourcesPath
+}
+
+liquibase {
+    activities {
+        //noinspection GroovyAssignabilityCheck
+        main {
+            changeLogFile 'src/sql/main/changelog.xml'
+            url dbUrl
+            username dbUser
+            password dbPassword
+        }
+        dev {
+            changeLogFile 'src/sql/dev/changelog.xml'
+            url dbUrl
+            username dbUser
+            password dbPassword
+        }
+    }
+}
+task updateDbMain(dependsOn: startDatabase) {
+    group = 'develop'
+    doLast {
+        liquibase.runList = 'main'
+        tasks.update.execute()
+    }
+}
+
+task updateDbDev(dependsOn: startDatabase) {
+    group = 'develop'
+    doLast {
+        liquibase.runList = 'main, dev'
+        tasks.update.execute()
+    }
+}
+
+javascript.source {
+    login {
+        js {
+            srcDir "src/main/js/login"
+            include "*.js"
+        }
+    }
+}
+
+combineJs {
+    source = javascript.source.login.js.files
+    //noinspection GrReassignedInClosureLocalVar
+    dest = file("${buildDir}/js/combine/login.js")
+}
+
+minifyJs {
+    source = combineJs
+    //noinspection GrReassignedInClosureLocalVar
+    dest = file("${buildDir}/js/min/login.js")
+    //sourceMap = file(""${buildDir}/js/min/login.sourcemap.json")
+    closure {
+        warningLevel = 'QUIET'
+    }
+}
+
+css.source {
+    login {
+        css {
+            srcDir "src/main/css/login"
+            include "*.css"
+        }
+    }
+}
+
+combineCss {
+    source = css.source.login.css.files
+    //noinspection GrReassignedInClosureLocalVar
+    dest = file("${buildDir}/css/combine/login.css")
+}
+
+minifyCss {
+    source = combineCss
+    dest = file("${buildDir}/css/min/login.css")
+    yuicompressor { // Optional
+        lineBreakPos = -1
+    }
+}
+
+def dev = true;
+task copyJs(type: Copy) {
+    group = 'develop'
+    from(dev ? combineJs : minifyJs) as String
+    into "src/main/webapp/js"
+}
+task copyCss(type: Copy) {
+    group = 'develop'
+    from(dev ? combineCss : minifyCss) as String
+    into "src/main/webapp/css"
+}
+
+compileJava.dependsOn.add(copyJs)
+compileJava.dependsOn.add(copyCss)
